@@ -444,7 +444,7 @@ async function syncData(){
       const nome=c[5]?.v||''; const whatsapp=c[6]?.v||'';
       const marca=c[7]?.v||''; const transmitir=c[8]?.v||'';
       const fonte=c[9]?.v||''; const cores=c[10]?.v||''; const iniciais=c[13]?.v||'';
-      const id=`p${i}`;
+      const id='p_'+btoa(unescape(encodeURIComponent((nome+marca+(ts||'')).slice(0,40)))).replace(/[^a-zA-Z0-9]/g,'').slice(0,20);
       let entryDate=null;
       if(ts){const m=String(ts).match(/Date\((\d+),(\d+),(\d+)/);if(m)entryDate=new Date(+m[1],+m[2],+m[3]);}
       if(!entryDate||entryDate<cutoff||(!nome&&!marca))return null;
@@ -456,6 +456,8 @@ async function syncData(){
       return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl,rowIndex:i};
     }).filter(Boolean);
     filteredProjects=[...allProjects];
+    // Re-merge briefings into workflow after sheet reload
+    if(allBriefings.length) mergeBriefingsToWorkflow();
     applyFilterAndSort(); updateStats();
     toast('Sincronizado');
   }catch(e){toast('Erro ao sincronizar',true);}
@@ -639,6 +641,10 @@ function openModal(p){
     ${f('Iniciais / símbolo',p.iniciais)}
     ${f('Cores de preferência',p.cores||'')}
     ${f('WhatsApp',p.whatsapp)}`;
+  // Append delete button for Supabase cards
+  if(p.source==='supabase'){
+    document.getElementById('modal-content').innerHTML+=`<div style="margin-top:20px;padding-top:16px;border-top:0.5px solid var(--glass-b)"><button onclick="deleteProjectCard('`+p.id+`')" style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--red);background:var(--red-bg);border:0.5px solid rgba(224,92,92,0.25);padding:8px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%;justify-content:center" onmouseover="this.style.background='rgba(224,92,92,0.2)'" onmouseout="this.style.background='var(--red-bg)'"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>Excluir card</button></div>`;
+  }
   document.getElementById('modal-overlay').classList.add('open');
   document.body.style.overflow='hidden';
 }
@@ -796,9 +802,65 @@ function openBriefModal(b){
     ${f('O que quer transmitir',b.transmitir)}
     ${f('Cores de preferência',b.cores)}
     ${f('Referências',b.referencias)}
-    ${f('Observações',b.observacoes)}`;
+    ${f('Observações',b.observacoes)}
+    <div style="margin-top:20px;padding-top:16px;border-top:0.5px solid var(--glass-b)">
+      <button onclick="deleteBriefing('${b.id}')" style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--red);background:var(--red-bg);border:0.5px solid rgba(224,92,92,0.25);padding:8px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%;justify-content:center;transition:all .2s" onmouseover="this.style.background='rgba(224,92,92,0.2)'" onmouseout="this.style.background='var(--red-bg)'">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        Excluir briefing
+      </button>
+    </div>`;
   document.getElementById('brief-overlay').classList.add('open');
   document.body.style.overflow='hidden';
+}
+
+async function deleteProjectCard(id){
+  // For Supabase-sourced workflow cards
+  const sbId=id.replace('sb_','');
+  if(!confirm('Remover este card do workflow permanentemente?'))return;
+  try{
+    const res=await fetch(`${SB_URL}/rest/v1/briefings?id=eq.${sbId}`,{
+      method:'DELETE',
+      headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`,'Prefer':'return=minimal'}
+    });
+    if(!res.ok)throw new Error(await res.text());
+    allBriefings=allBriefings.filter(b=>String(b.id)!==String(sbId));
+    filteredBriefings=filteredBriefings.filter(b=>String(b.id)!==String(sbId));
+    allProjects=allProjects.filter(p=>p.id!==id);
+    filteredProjects=filteredProjects.filter(p=>p.id!==id);
+    delete overrides[id]; saveOverrides();
+    closeModal(null,true);
+    renderBriefings(); updateBadge();
+    applyFilterAndSort(); updateStats();
+    toast('Card excluído');
+  }catch(e){
+    console.error(e);
+    toast('Erro ao excluir',true);
+  }
+}
+
+
+async function deleteBriefing(id){
+  if(!confirm('Excluir este briefing permanentemente?'))return;
+  try{
+    const res=await fetch(`${SB_URL}/rest/v1/briefings?id=eq.${id}`,{
+      method:'DELETE',
+      headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`,'Prefer':'return=minimal'}
+    });
+    if(!res.ok)throw new Error(await res.text());
+    // Remove from local arrays
+    allBriefings=allBriefings.filter(b=>b.id!==id);
+    filteredBriefings=filteredBriefings.filter(b=>b.id!==id);
+    // Remove from workflow too
+    allProjects=allProjects.filter(p=>p.id!==`sb_${id}`);
+    filteredProjects=filteredProjects.filter(p=>p.id!==`sb_${id}`);
+    closeBriefModal(null,true);
+    renderBriefings(); updateBadge();
+    applyFilterAndSort(); updateStats();
+    toast('Briefing excluído');
+  }catch(e){
+    console.error(e);
+    toast('Erro ao excluir',true);
+  }
 }
 
 function closeBriefModal(e,force){
