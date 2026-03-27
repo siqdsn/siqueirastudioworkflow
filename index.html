@@ -456,7 +456,8 @@ async function syncData(){
       return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl,rowIndex:i};
     }).filter(Boolean);
     filteredProjects=[...allProjects];
-    applyFilterAndSort(); updateStats();
+    // Sempre re-mergeia briefings do Supabase após reconstruir a lista da planilha
+    mergeBriefingsToWorkflow();
     toast('Sincronizado');
   }catch(e){toast('Erro ao sincronizar',true);}
   btn.classList.remove('syncing');
@@ -637,7 +638,6 @@ function openModal(p){
     ${f('O que quer transmitir',p.transmitir)}
     ${f('Estilo de fonte',p.fonte)}
     ${f('Iniciais / símbolo',p.iniciais)}
-    ${f('Descrição do símbolo',p.simbolo_descricao||'')}
     ${f('Cores de preferência',p.cores||'')}
     ${f('WhatsApp',p.whatsapp)}`;
   document.getElementById('modal-overlay').classList.add('open');
@@ -670,24 +670,24 @@ function markSeen(id){const s=getSeenIds();s.add(id);localStorage.setItem(SEEN_K
 
 // ── MERGE BRIEFINGS → WORKFLOW ──
 function mergeBriefingsToWorkflow(){
-  // Add Supabase briefings that don't exist in Google Sheet to the workflow
-  const existingNames=new Set(allProjects.map(p=>p.nome.toLowerCase().trim()));
+  if(!allBriefings.length)return;
+  // Remove todos os projetos que vieram do Supabase antes de re-inserir
+  // Isso garante que após um syncData os briefings não somem
+  allProjects=allProjects.filter(p=>!p.id.startsWith('sb_'));
+
   const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-60);
-  
+
   allBriefings.forEach((b,i)=>{
     const nameKey=(b.nome||'').toLowerCase().trim();
     if(!nameKey)return;
-    // Check if already in projects from Google Sheet
-    if(existingNames.has(nameKey))return;
-    
     const id=`sb_${b.id}`;
     const entryDate=b.created_at?new Date(b.created_at):null;
     if(!entryDate||entryDate<cutoff)return;
-    
+
     let status=overrides[id]||'EM PRODUÇÃO';
     const dl=calcDeadline(entryDate,status);
     const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
-    
+
     allProjects.push({
       id, status:eff, baseStatus:status,
       nome:b.nome||'—', whatsapp:b.whatsapp||'',
@@ -698,7 +698,7 @@ function mergeBriefingsToWorkflow(){
       ...dl, rowIndex:9000+i
     });
   });
-  
+
   applyFilterAndSort(); updateStats();
 }
 
@@ -747,7 +747,7 @@ function renderBriefings(){
     const isNew=!seen.has(b.id);
     const d=b.created_at?new Date(b.created_at):null;
     const dateStr=d?d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';
-    const tags=[b.fonte,b.iniciais,b.simbolo_descricao?`🔷 ${b.simbolo_descricao}`:null].filter(Boolean);
+    const tags=[b.fonte,b.iniciais].filter(Boolean);
     const wn=(b.whatsapp||'').replace(/\D/g,'');
     const card=document.createElement('div');
     card.className='brief-card';
@@ -794,7 +794,6 @@ function openBriefModal(b){
       ${f2('Estilo de fonte',b.fonte)}
       ${f2('Iniciais / símbolo',b.iniciais)}
     </div>
-    ${f('Descrição do símbolo',b.simbolo_descricao||'')}
     ${f('O que quer transmitir',b.transmitir)}
     ${f('Cores de preferência',b.cores)}
     ${f('Referências',b.referencias)}
