@@ -443,7 +443,7 @@ async function syncData(){
       const ts=c[4]?.v||null;
       const nome=c[5]?.v||''; const whatsapp=c[6]?.v||'';
       const marca=c[7]?.v||''; const transmitir=c[8]?.v||'';
-      const fonte=c[9]?.v||''; const iniciais=c[13]?.v||'';
+      const fonte=c[9]?.v||''; const cores=c[10]?.v||''; const iniciais=c[13]?.v||'';
       const id=`p${i}`;
       let entryDate=null;
       if(ts){const m=String(ts).match(/Date\((\d+),(\d+),(\d+)/);if(m)entryDate=new Date(+m[1],+m[2],+m[3]);}
@@ -453,7 +453,7 @@ async function syncData(){
       let status=overrides[id]||(norm||'EM PRODUÇÃO');
       const dl=calcDeadline(entryDate,status);
       const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
-      return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,iniciais,entryDate,...dl,rowIndex:i};
+      return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl,rowIndex:i};
     }).filter(Boolean);
     filteredProjects=[...allProjects];
     applyFilterAndSort(); updateStats();
@@ -564,6 +564,7 @@ function makeCard(p,priority){
     <div class="card-name">${p.nome||'—'}</div>
     <div class="card-brand">${p.marca||'—'}</div>
     ${p.transmitir?`<div class="card-transmit">${p.transmitir}</div>`:''}
+    ${p.cores?`<div class="card-transmit" style="color:var(--gold);opacity:0.7">⬤ ${p.cores}</div>`:''}
     <div class="card-meta"><span class="card-date">${fmtDate(p.entryDate)}</span><span style="display:flex;gap:4px;align-items:center">${p.source==='supabase'?'<span style="font-size:7px;padding:1px 5px;border-radius:4px;background:rgba(201,169,110,0.15);color:var(--gold)">form</span>':''}${dt}</span></div>`;
   return el;
 }
