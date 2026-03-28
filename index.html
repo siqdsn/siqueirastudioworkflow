@@ -416,6 +416,12 @@ document.addEventListener('DOMContentLoaded',async()=>{
   // Carrega overrides do Supabase + planilha + briefings em paralelo
   await Promise.all([loadOverrides(),syncData(true),loadBriefings(true)]);
   mergeBriefingsToWorkflow();
+  // Retry automático caso o carregamento inicial falhe silenciosamente
+  if(!allProjects.length){
+    await syncData(true);
+    mergeBriefingsToWorkflow();
+  }
+  updateStats();
   setInterval(syncData,90000);setInterval(loadBriefings,120000);
   setInterval(loadOverrides,90000);
 });
@@ -722,8 +728,9 @@ function markSeen(id){const s=getSeenIds();s.add(id);localStorage.setItem(SEEN_K
 
 // ── MERGE BRIEFINGS → WORKFLOW ──
 function mergeBriefingsToWorkflow(){
-  if(!allBriefings.length)return;
+  // Remove briefings antigos independente de ter novos ou não
   allProjects=allProjects.filter(p=>!p.id.startsWith('sb_'));
+  if(!allBriefings.length){applyFilterAndSort();updateStats();return;}
 
   const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-60);
 
