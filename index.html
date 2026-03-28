@@ -454,20 +454,21 @@ async function syncData(initialLoad=false){
       const c=row.c||[];
       const rawStatus=c[0]?.v||'';
       const ts=c[4]?.v||null;
-      const nome=c[5]?.v||''; const whatsapp=c[6]?.v||'';
+      const nome=c[5]?.v||''; 
+      // c[6] é WhatsApp mas o Sheets corrompeu como Date — ignorar
+      const whatsapp='';
       const marca=c[7]?.v||''; const transmitir=c[8]?.v||'';
       const fonte=c[9]?.v||''; const cores=c[10]?.v||''; const iniciais=c[13]?.v||'';
       // ID estável: não muda se entradas novas forem inseridas na planilha
       const id=stableId('p',nome,marca);
       let entryDate=null;
       if(ts){const m=String(ts).match(/Date\((\d+),(\d+),(\d+)/);if(m)entryDate=new Date(+m[1],+m[2],+m[3]);}
-      if(!entryDate||entryDate<cutoff||(!nome&&!marca))return null;
+      if(!entryDate||entryDate<cutoff||!nome)return null;
       const norm=normStatus(rawStatus);
-      // Se já tem override salvo, usa ele (status livre em produção)
+      // Se já tem override salvo, usa ele (card livre para mover entre estados)
       // Só aplica status da planilha se nunca houve override para este card
       const hasOverride=id in overrides;
-      if(!norm&&!hasOverride)return null;
-      let status=hasOverride?overrides[id]:(norm||'EM PRODUÇÃO');
+      let status=hasOverride?overrides[id]:norm;
       const dl=calcDeadline(entryDate,status);
       const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
       return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl};
@@ -484,13 +485,15 @@ async function syncData(initialLoad=false){
 
 function normStatus(raw){
   const r=(raw||'').toUpperCase().trim();
-  if(r.includes('PRODUÇÃO')||r.includes('PRODUCAO'))return'EM PRODUÇÃO';
+  if(!r)return'EM PRODUÇÃO';
+  if(r==='A PRODUZIR'||r.includes('PRODUÇÃO')||r.includes('PRODUCAO'))return'EM PRODUÇÃO';
   if(r.includes('ALTERAÇÃO')||r.includes('ALTERACAO'))return'ALTERAÇÃO SOLICITADA';
   if(r.includes('STANDBY')||r.includes('STAND BY'))return'STANDBY';
-  if(r.includes('SEPARAR')||r.includes('ARQUIVO'))return'SEPARAR ARQUIVOS';
-  if(r.includes('PAPELARIA')||r.includes('ENVIAR'))return'ENVIAR PAPELARIA';
+  if(r==='ARQUIVOS'||r.includes('SEPARAR')||r.includes('ARQUIVO'))return'SEPARAR ARQUIVOS';
+  if(r==='PAPELARIA'||r.includes('PAPELARIA')||r.includes('ENVIAR'))return'ENVIAR PAPELARIA';
   if(r.includes('FINALIZADO')||r.includes('ENTREGUE'))return'FINALIZADO';
-  return'';
+  if(r==='ESTORNADO'||r==='ABANDONADO')return'FINALIZADO';
+  return'EM PRODUÇÃO';
 }
 
 function calcDeadline(entryDate,status){
