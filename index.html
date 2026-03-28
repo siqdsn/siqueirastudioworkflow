@@ -403,10 +403,23 @@ const QUOTES=[
 let allProjects=[],filteredProjects=[],currentFilter='all',currentSort='date-asc',currentView='kanban',overrides={};
 let allBriefings=[],filteredBriefings=[];
 
+// Gera ID estável baseado em nome+marca (não muda com inserções na planilha)
+function stableId(prefix,nome,marca){
+  const str=(nome||'').toLowerCase().trim()+'|'+(marca||'').toLowerCase().trim();
+  let h=5381;for(let i=0;i<str.length;i++){h=((h<<5)+h)^str.charCodeAt(i);h>>>=0;}
+  return prefix+h.toString(36);
+}
+
 // ── INIT ──
-document.addEventListener('DOMContentLoaded',()=>{
+document.addEventListener('DOMContentLoaded',async()=>{
   try{overrides=JSON.parse(localStorage.getItem('ss_ov')||'{}');}catch{overrides={};}
-  setQuote();startClock();syncData();loadBriefings();setInterval(syncData,90000);setInterval(loadBriefings,120000);
+  setQuote();startClock();
+  // Aguarda os dois antes de renderizar para cards não sumrem ao abrir
+  await Promise.all([syncData(true),loadBriefings(true)]);
+  // Agora ambos chegaram: merge + render único
+  mergeBriefingsToWorkflow();
+  toast('Pronto');
+  setInterval(syncData,90000);setInterval(loadBriefings,120000);
 });
 
 function saveOverrides(){localStorage.setItem('ss_ov',JSON.stringify(overrides));}
@@ -429,7 +442,7 @@ function startClock(){
 }
 
 // ── SHEET SYNC ──
-async function syncData(){
+async function syncData(initialLoad=false){
   const btn=document.getElementById('sync-btn');
   btn.classList.add('syncing');
   try{
@@ -437,28 +450,34 @@ async function syncData(){
     const txt=await res.text();
     const json=JSON.parse(txt.replace(/^[^(]+\(/,'').replace(/\);?\s*$/,''));
     const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-DAYS_WINDOW);
-    allProjects=json.table.rows.map((row,i)=>{
+    allProjects=json.table.rows.map((row)=>{
       const c=row.c||[];
       const rawStatus=c[0]?.v||'';
       const ts=c[4]?.v||null;
       const nome=c[5]?.v||''; const whatsapp=c[6]?.v||'';
       const marca=c[7]?.v||''; const transmitir=c[8]?.v||'';
       const fonte=c[9]?.v||''; const cores=c[10]?.v||''; const iniciais=c[13]?.v||'';
-      const id=`p${i}`;
+      // ID estável: não muda se entradas novas forem inseridas na planilha
+      const id=stableId('p',nome,marca);
       let entryDate=null;
       if(ts){const m=String(ts).match(/Date\((\d+),(\d+),(\d+)/);if(m)entryDate=new Date(+m[1],+m[2],+m[3]);}
       if(!entryDate||entryDate<cutoff||(!nome&&!marca))return null;
       const norm=normStatus(rawStatus);
-      if(norm===null&&!overrides[id])return null;
-      let status=overrides[id]||(norm||'EM PRODUÇÃO');
+      // Se já tem override salvo, usa ele (status livre em produção)
+      // Só aplica status da planilha se nunca houve override para este card
+      const hasOverride=id in overrides;
+      if(!norm&&!hasOverride)return null;
+      let status=hasOverride?overrides[id]:(norm||'EM PRODUÇÃO');
       const dl=calcDeadline(entryDate,status);
       const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
-      return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl,rowIndex:i};
+      return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl};
     }).filter(Boolean);
     filteredProjects=[...allProjects];
-    // Sempre re-mergeia briefings do Supabase após reconstruir a lista da planilha
-    mergeBriefingsToWorkflow();
-    toast('Sincronizado');
+    if(!initialLoad){
+      // Re-mergeia briefings (no init, Promise.all já garante a ordem certa)
+      mergeBriefingsToWorkflow();
+      toast('Sincronizado');
+    }
   }catch(e){toast('Erro ao sincronizar',true);}
   btn.classList.remove('syncing');
 }
@@ -671,8 +690,6 @@ function markSeen(id){const s=getSeenIds();s.add(id);localStorage.setItem(SEEN_K
 // ── MERGE BRIEFINGS → WORKFLOW ──
 function mergeBriefingsToWorkflow(){
   if(!allBriefings.length)return;
-  // Remove todos os projetos que vieram do Supabase antes de re-inserir
-  // Isso garante que após um syncData os briefings não somem
   allProjects=allProjects.filter(p=>!p.id.startsWith('sb_'));
 
   const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-60);
@@ -680,11 +697,13 @@ function mergeBriefingsToWorkflow(){
   allBriefings.forEach((b,i)=>{
     const nameKey=(b.nome||'').toLowerCase().trim();
     if(!nameKey)return;
-    const id=`sb_${b.id}`;
+    // ID estável para briefings: usa nome+marca (igual à lógica da planilha)
+    const id=stableId('sb_',b.nome,b.marca);
     const entryDate=b.created_at?new Date(b.created_at):null;
     if(!entryDate||entryDate<cutoff)return;
 
-    let status=overrides[id]||'EM PRODUÇÃO';
+    const hasOverride=id in overrides;
+    let status=hasOverride?overrides[id]:'EM PRODUÇÃO';
     const dl=calcDeadline(entryDate,status);
     const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
 
@@ -702,7 +721,7 @@ function mergeBriefingsToWorkflow(){
   applyFilterAndSort(); updateStats();
 }
 
-async function loadBriefings(){
+async function loadBriefings(initialLoad=false){
   const btn=document.getElementById('brief-sync-btn');
   btn.classList.add('syncing');
   try{
@@ -713,8 +732,10 @@ async function loadBriefings(){
     allBriefings=await res.json();
     filteredBriefings=[...allBriefings];
     renderBriefings(); updateBadge();
-    mergeBriefingsToWorkflow();
-    toast(`${allBriefings.length} briefing(s)`);
+    if(!initialLoad){
+      mergeBriefingsToWorkflow();
+      toast(`${allBriefings.length} briefing(s)`);
+    }
   }catch(e){
     document.getElementById('briefings-grid').innerHTML=`<div style="text-align:center;padding:48px 0;color:var(--red);font-size:12px">Erro ao carregar. Verifique a tabela no Supabase.</div>`;
     toast('Erro ao carregar briefings',true);
@@ -799,7 +820,7 @@ function openBriefModal(b){
     ${f('Referências',b.referencias)}
     ${f('Observações',b.observacoes)}
     <div style="margin-top:20px;padding-top:16px;border-top:0.5px solid var(--glass-b)">
-      <button onclick="deleteBriefing('${b.id}')" style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--red);background:var(--red-bg);border:0.5px solid rgba(224,92,92,0.25);padding:8px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%;justify-content:center;transition:all .2s" onmouseover="this.style.background='rgba(224,92,92,0.2)'" onmouseout="this.style.background='var(--red-bg)'">
+      <button onclick="deleteBriefing('${b.id}',\`${b.nome||''}\`,\`${b.marca||''}\`)" style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--red);background:var(--red-bg);border:0.5px solid rgba(224,92,92,0.25);padding:8px 14px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;width:100%;justify-content:center;transition:all .2s" onmouseover="this.style.background='rgba(224,92,92,0.2)'" onmouseout="this.style.background='var(--red-bg)'">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
         Excluir briefing
       </button>
@@ -808,7 +829,7 @@ function openBriefModal(b){
   document.body.style.overflow='hidden';
 }
 
-async function deleteBriefing(id){
+async function deleteBriefing(id,nome,marca){
   if(!confirm('Excluir este briefing permanentemente?'))return;
   try{
     const res=await fetch(`${SB_URL}/rest/v1/briefings?id=eq.${id}`,{
@@ -816,12 +837,11 @@ async function deleteBriefing(id){
       headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`,'Prefer':'return=minimal'}
     });
     if(!res.ok)throw new Error(await res.text());
-    // Remove from local arrays
+    const workflowId=stableId('sb_',nome,marca);
     allBriefings=allBriefings.filter(b=>b.id!==id);
     filteredBriefings=filteredBriefings.filter(b=>b.id!==id);
-    // Remove from workflow too
-    allProjects=allProjects.filter(p=>p.id!==`sb_${id}`);
-    filteredProjects=filteredProjects.filter(p=>p.id!==`sb_${id}`);
+    allProjects=allProjects.filter(p=>p.id!==workflowId);
+    filteredProjects=filteredProjects.filter(p=>p.id!==workflowId);
     closeBriefModal(null,true);
     renderBriefings(); updateBadge();
     applyFilterAndSort(); updateStats();
