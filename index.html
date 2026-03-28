@@ -502,7 +502,9 @@ async function syncData(initialLoad=false){
       const hasOverride=id in overrides;
       let status=hasOverride?overrides[id]:norm;
       const dl=calcDeadline(entryDate,status);
-      const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
+      // Se o status foi definido manualmente (override), nunca sobrescrever com ATRASADO
+      // ATRASADO só entra automático quando o status vem da planilha sem intervenção
+      const eff=(!hasOverride&&dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status))?'ATRASADO':status;
       return{id,status:eff,baseStatus:status,nome,whatsapp,marca,transmitir,fonte,cores,iniciais,entryDate,...dl};
     }).filter(Boolean);
     filteredProjects=[...allProjects];
@@ -745,7 +747,8 @@ function mergeBriefingsToWorkflow(){
     const hasOverride=id in overrides;
     let status=hasOverride?overrides[id]:'EM PRODUÇÃO';
     const dl=calcDeadline(entryDate,status);
-    const eff=dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status)?'ATRASADO':status;
+    // Override manual nunca é sobrescrito por ATRASADO automático
+    const eff=(!hasOverride&&dl.isOverdue&&!['STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA','FINALIZADO'].includes(status))?'ATRASADO':status;
 
     allProjects.push({
       id, status:eff, baseStatus:status,
