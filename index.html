@@ -412,17 +412,43 @@ function stableId(prefix,nome,marca){
 
 // ── INIT ──
 document.addEventListener('DOMContentLoaded',async()=>{
-  try{overrides=JSON.parse(localStorage.getItem('ss_ov')||'{}');}catch{overrides={};}
   setQuote();startClock();
-  // Aguarda os dois antes de renderizar para cards não sumrem ao abrir
-  await Promise.all([syncData(true),loadBriefings(true)]);
-  // Agora ambos chegaram: merge + render único
+  // Carrega overrides do Supabase + planilha + briefings em paralelo
+  await Promise.all([loadOverrides(),syncData(true),loadBriefings(true)]);
   mergeBriefingsToWorkflow();
-  toast('Pronto');
   setInterval(syncData,90000);setInterval(loadBriefings,120000);
+  setInterval(loadOverrides,90000);
 });
 
-function saveOverrides(){localStorage.setItem('ss_ov',JSON.stringify(overrides));}
+// ── OVERRIDES NO SUPABASE ──
+// Salva o override no Supabase (upsert por project_id)
+async function saveOverride(id,status){
+  overrides[id]=status;
+  try{
+    await fetch(`${SB_URL}/rest/v1/workflow_overrides`,{
+      method:'POST',
+      headers:{
+        'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`,
+        'Content-Type':'application/json',
+        'Prefer':'resolution=merge-duplicates,return=minimal'
+      },
+      body:JSON.stringify({project_id:id,status})
+    });
+  }catch(e){console.warn('Erro ao salvar override:',e);}
+}
+
+// Carrega todos os overrides do Supabase para o objeto local
+async function loadOverrides(){
+  try{
+    const res=await fetch(`${SB_URL}/rest/v1/workflow_overrides?select=project_id,status`,{
+      headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`}
+    });
+    if(!res.ok)return;
+    const rows=await res.json();
+    overrides={};
+    rows.forEach(r=>{overrides[r.project_id]=r.status;});
+  }catch(e){console.warn('Erro ao carregar overrides:',e);}
+}
 
 function setQuote(){
   const d=new Date();
@@ -673,15 +699,19 @@ function closeModal(e,force){
   }
 }
 
-function changeStatus(id,newStatus){
-  overrides[id]=newStatus; saveOverrides();
+async function changeStatus(id,newStatus){
+  // Atualiza local imediatamente para UI fluida
+  overrides[id]=newStatus;
   const proj=allProjects.find(p=>p.id===id);
   if(proj){
     proj.status=newStatus; proj.baseStatus=newStatus;
     const dl=calcDeadline(proj.entryDate,newStatus);
     Object.assign(proj,dl);
   }
-  applyFilterAndSort(); updateStats(); toast('Status atualizado');
+  applyFilterAndSort(); updateStats();
+  // Persiste no Supabase (todos os dispositivos)
+  await saveOverride(id,newStatus);
+  toast('Status salvo');
 }
 
 // ── SUPABASE BRIEFINGS ──
