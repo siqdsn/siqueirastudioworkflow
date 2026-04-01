@@ -379,7 +379,7 @@ const SHEET_ID='1GVmPX7Yh2rp7cGF93lTX5B9yQx_R6EA4Mj5CnbQk0G8';
 const SHEET_URL=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
 const SB_URL='https://hslnuqqgcxhnvndxdpua.supabase.co';
 const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhzbG51cXFnY3hobnZuZHhkcHVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1NjgxNjksImV4cCI6MjA5MDE0NDE2OX0.muQLdA42DJOejrcvWCbc632FSlDyzXhBuSLL-11wnTg';
-const DAYS_WINDOW=60;
+const DAYS_WINDOW=180; // 6 meses — evita cards saírem da janela antes de serem finalizados
 
 const STATUSES=['EM PRODUÇÃO','ALTERAÇÃO SOLICITADA','STANDBY','SEPARAR ARQUIVOS','ENVIAR PAPELARIA'];
 const ALL_STATUSES=[...STATUSES,'ATRASADO','FINALIZADO'];
@@ -403,9 +403,12 @@ const QUOTES=[
 let allProjects=[],filteredProjects=[],currentFilter='all',currentSort='date-asc',currentView='kanban',overrides={};
 let allBriefings=[],filteredBriefings=[];
 
-// Gera ID estável baseado em nome+marca (não muda com inserções na planilha)
+// Gera ID estável baseado em nome+marca
+// Normaliza espaços múltiplos e acentos para o hash ser consistente
 function stableId(prefix,nome,marca){
-  const str=(nome||'').toLowerCase().trim()+'|'+(marca||'').toLowerCase().trim();
+  // Remover espaços duplicados, trim, lowercase — evita hash diferente por espaço extra
+  const norm=s=>(s||'').toLowerCase().trim().replace(/\s+/g,' ');
+  const str=norm(nome)+'|'+norm(marca);
   let h=5381;for(let i=0;i<str.length;i++){h=((h<<5)+h)^str.charCodeAt(i);h>>>=0;}
   return prefix+h.toString(36);
 }
@@ -422,8 +425,8 @@ document.addEventListener('DOMContentLoaded',async()=>{
     mergeBriefingsToWorkflow();
   }
   updateStats();
-  setInterval(syncData,90000);setInterval(loadBriefings,120000);
-  setInterval(loadOverrides,90000);
+  setInterval(syncData,120000);setInterval(loadBriefings,180000);
+  // loadOverrides roda dentro do syncData — não precisa de interval separado
 });
 
 // ── OVERRIDES NO SUPABASE ──
@@ -459,10 +462,21 @@ async function loadOverrides(){
     const res=await fetch(`${SB_URL}/rest/v1/workflow_overrides?select=project_id,status`,{
       headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`}
     });
-    if(!res.ok)return;
+    if(!res.ok){
+      // 503 = Supabase acordando — NÃO zerar overrides, manter o que está em memória
+      console.warn('loadOverrides ignorado: status',res.status);
+      return;
+    }
     const rows=await res.json();
-    overrides={};
-    rows.forEach(r=>{overrides[r.project_id]=r.status;});
+    if(!Array.isArray(rows)||rows.length===0&&Object.keys(overrides).length>0){
+      // Resposta vazia suspeita — manter overrides em memória intactos
+      console.warn('loadOverrides: resposta vazia, mantendo estado atual');
+      return;
+    }
+    // Merge: manter overrides locais que não estão no servidor (gravação ainda pendente)
+    const fresh={};
+    rows.forEach(r=>{fresh[r.project_id]=r.status;});
+    overrides=fresh;
   }catch(e){console.warn('Erro ao carregar overrides:',e);}
 }
 
@@ -519,7 +533,8 @@ async function syncData(initialLoad=false){
     }).filter(Boolean);
     filteredProjects=[...allProjects];
     if(!initialLoad){
-      // Re-mergeia briefings (no init, Promise.all já garante a ordem certa)
+      // Recarregar overrides antes de renderizar para garantir estado mais recente
+      await loadOverrides();
       mergeBriefingsToWorkflow();
       toast('Sincronizado');
     }
