@@ -416,17 +416,17 @@ function stableId(prefix,nome,marca){
 // ── INIT ──
 document.addEventListener('DOMContentLoaded',async()=>{
   setQuote();startClock();
-  // Carrega overrides do Supabase + planilha + briefings em paralelo
-  await Promise.all([loadOverrides(),syncData(true),loadBriefings(true)]);
+  // PASSO 1: carregar overrides PRIMEIRO — sem eles o kanban renderiza errado
+  // loadOverrides tem retry interno para acordar o Supabase se necessário
+  await loadOverrides();
+  // PASSO 2: carregar planilha e briefings em paralelo (agora os overrides já estão prontos)
+  await Promise.all([syncData(true),loadBriefings(true)]);
+  // PASSO 3: render único com tudo carregado
   mergeBriefingsToWorkflow();
-  // Retry automático caso o carregamento inicial falhe silenciosamente
-  if(!allProjects.length){
-    await syncData(true);
-    mergeBriefingsToWorkflow();
-  }
   updateStats();
-  setInterval(syncData,120000);setInterval(loadBriefings,180000);
-  // loadOverrides roda dentro do syncData — não precisa de interval separado
+  // Syncs periódicos — loadOverrides roda dentro do syncData
+  setInterval(syncData,120000);
+  setInterval(loadBriefings,180000);
 });
 
 // ── OVERRIDES NO SUPABASE ──
@@ -456,28 +456,39 @@ async function saveOverride(id,status){
   }
 }
 
-// Carrega todos os overrides do Supabase para o objeto local
+// Carrega overrides do Supabase com retry — essencial pois Supabase Free dorme
+// Tenta até 5 vezes com espera crescente antes de desistir
 async function loadOverrides(){
-  try{
-    const res=await fetch(`${SB_URL}/rest/v1/workflow_overrides?select=project_id,status`,{
-      headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`}
-    });
-    if(!res.ok){
-      // 503 = Supabase acordando — NÃO zerar overrides, manter o que está em memória
-      console.warn('loadOverrides ignorado: status',res.status);
-      return;
+  for(let attempt=0;attempt<5;attempt++){
+    try{
+      const res=await fetch(`${SB_URL}/rest/v1/workflow_overrides?select=project_id,status`,{
+        headers:{'apikey':SB_KEY,'Authorization':`Bearer ${SB_KEY}`}
+      });
+      if(res.status===503||res.status===504){
+        // Supabase acordando — esperar e tentar de novo
+        const wait=800*Math.pow(2,attempt); // 0.8s, 1.6s, 3.2s, 6.4s, 12.8s
+        console.warn(`loadOverrides: Supabase dormindo, tentativa ${attempt+1}, aguardando ${wait}ms`);
+        await new Promise(r=>setTimeout(r,wait));
+        continue;
+      }
+      if(!res.ok){
+        console.warn('loadOverrides: erro',res.status);
+        return false;
+      }
+      const rows=await res.json();
+      if(!Array.isArray(rows)){return false;}
+      // Só substituir overrides se a resposta for válida
+      const fresh={};
+      rows.forEach(r=>{if(r.project_id&&r.status)fresh[r.project_id]=r.status;});
+      overrides=fresh;
+      return true; // sucesso
+    }catch(e){
+      console.warn('loadOverrides catch:',e.message);
+      if(attempt<4) await new Promise(r=>setTimeout(r,800*Math.pow(2,attempt)));
     }
-    const rows=await res.json();
-    if(!Array.isArray(rows)||rows.length===0&&Object.keys(overrides).length>0){
-      // Resposta vazia suspeita — manter overrides em memória intactos
-      console.warn('loadOverrides: resposta vazia, mantendo estado atual');
-      return;
-    }
-    // Merge: manter overrides locais que não estão no servidor (gravação ainda pendente)
-    const fresh={};
-    rows.forEach(r=>{fresh[r.project_id]=r.status;});
-    overrides=fresh;
-  }catch(e){console.warn('Erro ao carregar overrides:',e);}
+  }
+  console.warn('loadOverrides: falhou após 5 tentativas, mantendo estado atual');
+  return false;
 }
 
 function setQuote(){
