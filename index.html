@@ -530,11 +530,14 @@ async function syncData(initialLoad=false){
       const id=stableId('p',nome,marca);
       let entryDate=null;
       if(ts){const m=String(ts).match(/Date\((\d+),(\d+),(\d+)/);if(m)entryDate=new Date(+m[1],+m[2],+m[3]);}
-      if(!entryDate||entryDate<cutoff||!nome)return null;
+      if(!nome)return null;
+      if(!entryDate)return null;
       const norm=normStatus(rawStatus);
       // Se já tem override salvo, usa ele (card livre para mover entre estados)
       // Só aplica status da planilha se nunca houve override para este card
       const hasOverride=id in overrides;
+      // Card com override nunca some por data — só descarta por data se vier limpo da planilha
+      if(!hasOverride&&entryDate<cutoff)return null;
       let status=hasOverride?overrides[id]:norm;
       const dl=calcDeadline(entryDate,status);
       // Se o status foi definido manualmente (override), nunca sobrescrever com ATRASADO
@@ -770,16 +773,13 @@ function mergeBriefingsToWorkflow(){
   allProjects=allProjects.filter(p=>!p.id.startsWith('sb_'));
   if(!allBriefings.length){applyFilterAndSort();updateStats();return;}
 
-  const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-60);
-
+  // Briefings do formulário NUNCA somem do workflow
+  // Ficam permanentemente visíveis — apenas transitam entre colunas (incluindo Finalizado)
   allBriefings.forEach((b,i)=>{
     const nameKey=(b.nome||'').toLowerCase().trim();
     if(!nameKey)return;
-    // ID estável para briefings: usa nome+marca (igual à lógica da planilha)
     const id=stableId('sb_',b.nome,b.marca);
-    const entryDate=b.created_at?new Date(b.created_at):null;
-    if(!entryDate||entryDate<cutoff)return;
-
+    const entryDate=b.created_at?new Date(b.created_at):new Date();
     const hasOverride=id in overrides;
     let status=hasOverride?overrides[id]:'EM PRODUÇÃO';
     const dl=calcDeadline(entryDate,status);
